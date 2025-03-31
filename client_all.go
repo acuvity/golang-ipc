@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// ClientConnectionClosed is the error returned by Read() when the connection has closed.
+var ClientConnectionClosed = errors.New("client has closed the connection")
+
 // StartClient - start the ipc client.
 // ipcName = is the name of the unix socket or named pipe that the client will try and connect to.
 func StartClient(ipcName string, config *ClientConfig) (*Client, error) {
@@ -134,7 +137,7 @@ func (c *Client) readData(buff []byte) bool {
 		if c.status == Closing {
 			c.status = Closed
 			c.received <- &Message{Status: c.status.String(), MsgType: -1}
-			c.received <- &Message{Err: errors.New("client has closed the connection"), MsgType: -2}
+			c.received <- &Message{Err: ClientConnectionClosed, MsgType: -2}
 			return false
 		}
 

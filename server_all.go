@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// ServerConnectionClosed is the error returned by Read() when the connection has closed.
+var ServerConnectionClosed = errors.New("server has closed the connection")
+
 // StartServer - starts the ipc server.
 //
 // ipcName - is the name of the unix socket or named pipe that will be created, the client needs to use the same name
@@ -149,7 +152,7 @@ func (s *Server) readData(buff []byte) bool {
 
 			s.status = Closed
 			s.received <- &Message{Status: s.status.String(), MsgType: -1}
-			s.received <- &Message{Err: errors.New("server has closed the connection"), MsgType: -1}
+			s.received <- &Message{Err: ServerConnectionClosed, MsgType: -1}
 			return false
 		}
 
@@ -251,13 +254,11 @@ func (s *Server) write() {
 	}
 }
 
-
 // getStatus - get the current status of the connection
 func (s *Server) getStatus() Status {
 
 	return s.status
 }
-
 
 // StatusCode - returns the current connection status
 func (s *Server) StatusCode() Status {
