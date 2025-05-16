@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -172,7 +173,7 @@ func (s *Server) readData(buff []byte) bool {
 // if MsgType is a negative number its an internal message
 func (s *Server) Read() (*Message, error) {
 
-	m, ok := (<-s.received)
+	m, ok := <-s.received
 	if !ok {
 		return nil, errors.New("the received channel has been closed")
 	}
@@ -184,6 +185,27 @@ func (s *Server) Read() (*Message, error) {
 	}
 
 	return m, nil
+}
+
+// ReadWithContext - blocking function, but it reacts to end of context, reads each message received
+// if MsgType is a negative number it's an internal message
+func (s *Server) ReadWithContext(ctx context.Context) (*Message, error) {
+	select {
+	case m, ok := <-s.received:
+		if !ok {
+			return nil, errors.New("the received channel has been closed")
+		}
+
+		if m.Err != nil {
+			//close(s.received)
+			//close(s.toWrite)
+			return nil, m.Err
+		}
+
+		return m, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Write - writes a message to the ipc connection
@@ -206,6 +228,31 @@ func (s *Server) Write(msgType int, message []byte) error {
 
 	} else {
 		return errors.New(s.status.String())
+	}
+
+	return nil
+}
+
+// WriteWithContext - writes a message to the ipc connection, but it reacts to end of context.
+// msgType - denotes the type of data being sent. 0 is a reserved type for internal messages and errors.
+func (s *Server) WriteWithContext(ctx context.Context, msgType int, message []byte) error {
+
+	if msgType == 0 {
+		return errors.New("message type 0 is reserved")
+	}
+
+	if len(message) > s.maxMsgSize {
+		return errors.New("message exceeds maximum message length")
+	}
+
+	if s.status != Connected {
+		return errors.New(s.status.String())
+	}
+
+	select {
+	case s.toWrite <- &Message{MsgType: msgType, Data: message}:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	return nil

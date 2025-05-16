@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -176,7 +177,7 @@ func (c *Client) reconnect() {
 // if MsgType is a negative number its an internal message
 func (c *Client) Read() (*Message, error) {
 
-	m, ok := (<-c.received)
+	m, ok := <-c.received
 	if !ok {
 		return nil, errors.New("the received channel has been closed")
 	}
@@ -190,7 +191,28 @@ func (c *Client) Read() (*Message, error) {
 	return m, nil
 }
 
-// Write - writes a  message to the ipc connection.
+// ReadWithContext - blocking function, but it reacts to end of context, reads each message received
+// if MsgType is a negative number it's an internal message
+func (c *Client) ReadWithContext(ctx context.Context) (*Message, error) {
+	select {
+	case m, ok := <-c.received:
+		if !ok {
+			return nil, errors.New("the received channel has been closed")
+		}
+
+		if m.Err != nil {
+			close(c.received)
+			close(c.toWrite)
+			return nil, m.Err
+		}
+
+		return m, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Write - writes a message to the ipc connection.
 // msgType - denotes the type of data being sent. 0 is a reserved type for internal messages and errors.
 func (c *Client) Write(msgType int, message []byte) error {
 
@@ -208,6 +230,31 @@ func (c *Client) Write(msgType int, message []byte) error {
 	}
 
 	c.toWrite <- &Message{MsgType: msgType, Data: message}
+
+	return nil
+}
+
+// WriteWithContext - writes a message to the ipc connection, but it reacts to end of context.
+// if MsgType is a negative number it's an internal message
+func (c *Client) WriteWithContext(ctx context.Context, msgType int, message []byte) error {
+
+	if msgType == 0 {
+		return errors.New("Message type 0 is reserved")
+	}
+
+	if c.status != Connected {
+		return errors.New(c.status.String())
+	}
+
+	if len(message) > c.maxMsgSize {
+		return errors.New("Message exceeds maximum message length")
+	}
+
+	select {
+	case c.toWrite <- &Message{MsgType: msgType, Data: message}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	return nil
 }
