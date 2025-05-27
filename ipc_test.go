@@ -854,21 +854,6 @@ func TestClientSendMessage(t *testing.T) {
 	<-complete
 }
 
-func TestEncryptionFunctions(t *testing.T) {
-
-	res := publicKeyToBytes(nil)
-	if len(res) != 0 {
-		t.Error("should have returned 0 bytes")
-
-	}
-
-	buff := make([]byte, 0)
-
-	if bytesToPublicKey(buff) != nil {
-		t.Error("should have failed as buff is 0 bytes")
-	}
-}
-
 func TestNoEncrytion(t *testing.T) {
 
 	config := &ServerConfig{Encryption: false}

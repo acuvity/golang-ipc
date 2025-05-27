@@ -3,155 +3,138 @@ package ipc
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 )
 
 func (sc *Server) keyExchange() ([32]byte, error) {
-
 	var shared [32]byte
 
-	priv, pub, err := generateKeys()
+	curve := ecdh.X25519()
+
+	priv, err := curve.GenerateKey(rand.Reader)
 	if err != nil {
-		return shared, err
+		return shared, fmt.Errorf("unable to generate key: %w", err)
+	}
+	pub := priv.PublicKey()
+
+	// Send server's public key
+	if err := sendPublic(sc.conn, pub.Bytes()); err != nil {
+		return shared, fmt.Errorf("unable to send public server key: %w", err)
 	}
 
-	// send servers public key
-	err = sendPublic(sc.conn, pub)
+	// Receive client's public key
+	pubBytes, err := recvPublic(sc.conn)
 	if err != nil {
-		return shared, err
+		return shared, fmt.Errorf("unable to receive client key: %w", err)
 	}
 
-	// received clients public key
-	pubRecvd, err := recvPublic(sc.conn)
+	clientPub, err := curve.NewPublicKey(pubBytes)
 	if err != nil {
-		return shared, err
+		return shared, fmt.Errorf("unable to validate client key: %w", err)
 	}
 
-	b, _ := pubRecvd.Curve.ScalarMult(pubRecvd.X, pubRecvd.Y, priv.D.Bytes())
+	secret, err := priv.ECDH(clientPub)
+	if err != nil {
+		return shared, fmt.Errorf("unable to get secret from key: %w", err)
+	}
 
-	shared = sha256.Sum256(b.Bytes())
+	shared = sha256.Sum256(secret)
 
 	return shared, nil
-
 }
 
 func (cc *Client) keyExchange() ([32]byte, error) {
-
 	var shared [32]byte
 
-	priv, pub, err := generateKeys()
-	if err != nil {
-		return shared, err
-	}
+	curve := ecdh.X25519()
 
-	// received servers public key
+	priv, err := curve.GenerateKey(rand.Reader)
+	if err != nil {
+		return shared, fmt.Errorf("unable to generate key: %w", err)
+	}
+	pub := priv.PublicKey()
+
+	// Receive server's public key
 	pubRecvd, err := recvPublic(cc.conn)
 	if err != nil {
-		return shared, err
+		return shared, fmt.Errorf("unable to receive public server key: %w", err)
 	}
 
-	// send clients public key
-	err = sendPublic(cc.conn, pub)
+	serverPub, err := curve.NewPublicKey(pubRecvd)
 	if err != nil {
-		return shared, err
+		return shared, fmt.Errorf("unable to validate server key: %w", err)
 	}
 
-	b, _ := pubRecvd.Curve.ScalarMult(pubRecvd.X, pubRecvd.Y, priv.D.Bytes())
+	// Send client's public key
+	if err := sendPublic(cc.conn, pub.Bytes()); err != nil {
+		return shared, fmt.Errorf("unable to send public client key: %w", err)
+	}
 
-	shared = sha256.Sum256(b.Bytes())
+	// Derive shared secret
+	secret, err := priv.ECDH(serverPub)
+	if err != nil {
+		return shared, fmt.Errorf("unable to get secret from key: %w", err)
+	}
+
+	shared = sha256.Sum256(secret)
 
 	return shared, nil
 }
 
-func generateKeys() (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
+func sendPublic(conn net.Conn, pub []byte) error {
 
-	priva, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		return nil, nil, err
+	length := len(pub)
+
+	if length == 0 || length > 255 {
+		return fmt.Errorf("invalid public key length (%d)", length)
 	}
 
-	puba := &priva.PublicKey
+	buf := append([]byte{byte(length)}, pub...)
 
-	if !priva.IsOnCurve(puba.X, puba.Y) {
-		return nil, nil, errors.New("keys created arn't on curve")
-	}
-
-	return priva, puba, err
-
-}
-
-func sendPublic(conn net.Conn, pub *ecdsa.PublicKey) error {
-
-	pubSend := publicKeyToBytes(pub)
-	if pubSend == nil {
-		return errors.New("public key cannot be converted to bytes")
-	}
-
-	_, err := conn.Write(pubSend)
-	if err != nil {
-		return errors.New("could not send public key")
+	n, err := conn.Write(buf)
+	if err != nil || n != len(buf) {
+		return fmt.Errorf("unable to send public key (%d vs %d): %w", n, len(buf), err)
 	}
 
 	return nil
 }
 
-func recvPublic(conn net.Conn) (*ecdsa.PublicKey, error) {
+func recvPublic(conn net.Conn) ([]byte, error) {
 
-	buff := make([]byte, 98)
-	i, err := conn.Read(buff)
-	if err != nil {
-		return nil, errors.New("didn't received public key")
+	lenBuf := make([]byte, 1)
+	if _, err := io.ReadFull(conn, lenBuf); err != nil {
+		return nil, fmt.Errorf("unable to read public key length: %w", err)
 	}
 
-	if i != 97 {
-		return nil, errors.New("public key received isn't valid length")
+	length := int(lenBuf[0])
+	if length <= 0 || length > 255 {
+		return nil, fmt.Errorf("invalid public key length received (%d)", length)
 	}
 
-	recvdPub := bytesToPublicKey(buff[:i])
-
-	if !recvdPub.IsOnCurve(recvdPub.X, recvdPub.Y) {
-		return nil, errors.New("didn't received valid public key")
+	pub := make([]byte, length)
+	if _, err := io.ReadFull(conn, pub); err != nil {
+		return nil, fmt.Errorf("unable to read public key bytes: %w", err)
 	}
 
-	return recvdPub, nil
-}
-
-func publicKeyToBytes(pub *ecdsa.PublicKey) []byte {
-
-	if pub == nil || pub.X == nil || pub.Y == nil {
-		return nil
-	}
-
-	return elliptic.Marshal(elliptic.P384(), pub.X, pub.Y)
-}
-
-func bytesToPublicKey(recvdPub []byte) *ecdsa.PublicKey {
-
-	if len(recvdPub) == 0 {
-		return nil
-	}
-
-	x, y := elliptic.Unmarshal(elliptic.P384(), recvdPub)
-	return &ecdsa.PublicKey{Curve: elliptic.P384(), X: x, Y: y}
-
+	return pub, nil
 }
 
 func createCipher(shared [32]byte) (*cipher.AEAD, error) {
 
 	b, err := aes.NewCipher(shared[:])
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to create cipher: %w", err)
 	}
 
 	gcm, err := cipher.NewGCM(b)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to create GCM: %w", err)
 	}
 
 	return &gcm, nil
@@ -161,10 +144,11 @@ func encrypt(g cipher.AEAD, data []byte) ([]byte, error) {
 
 	nonce := make([]byte, g.NonceSize())
 
-	_, err := io.ReadFull(rand.Reader, nonce)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("unable to read nonce: %w", err)
+	}
 
-	return g.Seal(nonce, nonce, data, nil), err
-
+	return g.Seal(nonce, nonce, data, nil), nil
 }
 
 func decrypt(g cipher.AEAD, recdData []byte) ([]byte, error) {
@@ -177,9 +161,8 @@ func decrypt(g cipher.AEAD, recdData []byte) ([]byte, error) {
 	nonce, recdData := recdData[:nonceSize], recdData[nonceSize:]
 	plain, err := g.Open(nil, nonce, recdData, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to decrypt and authenticate ciphertext: %w", err)
 	}
 
 	return plain, nil
-
 }
