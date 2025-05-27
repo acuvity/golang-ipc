@@ -95,7 +95,7 @@ func sendPublic(conn net.Conn, pub *ecdsa.PublicKey) error {
 
 	_, err := conn.Write(pubSend)
 	if err != nil {
-		return errors.New("could not sent public key")
+		return errors.New("could not send public key")
 	}
 
 	return nil

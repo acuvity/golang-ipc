@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 )
 
 // 1st message sent from the server
-// byte 0 = protocal version no.
+// byte 0 = protocol version no.
 // byte 1 = whether encryption is to be used - 0 no , 1 = encryption
 func (sc *Server) handshake() error {
 
@@ -216,7 +217,9 @@ func (cc *Client) msgLength() error {
 	}
 
 	var msgLen uint32
-	binary.Read(bytes.NewReader(buff), binary.BigEndian, &msgLen) // message length
+	if err := binary.Read(bytes.NewReader(buff), binary.BigEndian, &msgLen); err != nil { // message length
+		return fmt.Errorf("unable to read message length: %w", err)
+	}
 
 	buff = make([]byte, int(msgLen))
 
@@ -236,7 +239,9 @@ func (cc *Client) msgLength() error {
 	}
 
 	var maxMsgSize uint32
-	binary.Read(bytes.NewReader(buff2), binary.BigEndian, &maxMsgSize) // message length
+	if err := binary.Read(bytes.NewReader(buff2), binary.BigEndian, &maxMsgSize); err != nil { // message length
+		return fmt.Errorf("unable to read message length: %w", err)
+	}
 
 	cc.maxMsgSize = int(maxMsgSize)
 	cc.handshakeSendReply(0)

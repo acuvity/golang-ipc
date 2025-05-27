@@ -196,7 +196,7 @@ func TestWrite(t *testing.T) {
 		t.Error("There should be an error as the data we're attempting to write is bigger than the maxMsgSize")
 	}
 
-	sc.status = NotConnected
+	sc.setStatusCode(NotConnected)
 
 	buf2 := make([]byte, 5)
 	err5 := sc.Write(2, buf2)
@@ -204,7 +204,7 @@ func TestWrite(t *testing.T) {
 		t.Error("we should have an error becuse there is no connection")
 	}
 
-	sc.status = Connected
+	sc.setStatusCode(Connected)
 
 	buf = make([]byte, 1)
 
@@ -219,7 +219,7 @@ func TestWrite(t *testing.T) {
 		t.Error("There should be an error is the data we're attempting to write is bigger than the maxMsgSize")
 	}
 
-	cc.status = NotConnected
+	cc.setStatusCode(NotConnected)
 
 	buf = make([]byte, 5)
 	err = cc.Write(2, buf)
@@ -239,11 +239,11 @@ func TestRead(t *testing.T) {
 		timeout:  0,
 	}
 
-	sIPC.status = Connected
+	sIPC.setStatusCode(Connected)
 
 	serverFinished := make(chan bool, 1)
 
-	go func(s *Server) {
+	go func(_ *Server) {
 
 		_, err := sIPC.Read()
 		if err != nil {
@@ -281,7 +281,7 @@ func TestRead(t *testing.T) {
 		received:   make(chan *Message),
 	}
 
-	cIPC.status = Connected
+	cIPC.setStatusCode(Connected)
 
 	clientFinished := make(chan bool, 1)
 
@@ -318,63 +318,63 @@ func TestStatus(t *testing.T) {
 		status: NotConnected,
 	}
 
-	s := sc.getStatus()
+	s := sc.StatusCode()
 
 	if s.String() != "Not Connected" {
 		t.Error("status string should have returned Not Connected")
 	}
 
-	sc.status = Listening
+	sc.setStatusCode(Listening)
 
-	s1 := sc.getStatus()
+	s1 := sc.StatusCode()
 
 	if s1.String() != "Listening" {
 		t.Error("status string should have returned Listening")
 	}
 
-	sc.status = Connecting
+	sc.setStatusCode(Connecting)
 
-	s1 = sc.getStatus()
+	s1 = sc.StatusCode()
 
 	if s1.String() != "Connecting" {
 		t.Error("status string should have returned Connecting")
 	}
 
-	sc.status = Connected
+	sc.setStatusCode(Connected)
 
-	s2 := sc.getStatus()
+	s2 := sc.StatusCode()
 
 	if s2.String() != "Connected" {
 		t.Error("status string should have returned Connected")
 	}
 
-	sc.status = ReConnecting
+	sc.setStatusCode(Reconnecting)
 
-	s3 := sc.getStatus()
+	s3 := sc.StatusCode()
 
 	if s3.String() != "Reconnecting" {
 		t.Error("status string should have returned Reconnecting")
 	}
 
-	sc.status = Closed
+	sc.setStatusCode(Closed)
 
-	s4 := sc.getStatus()
+	s4 := sc.StatusCode()
 
 	if s4.String() != "Closed" {
 		t.Error("status string should have returned Closed")
 	}
 
-	sc.status = Error
+	sc.setStatusCode(Error)
 
-	s5 := sc.getStatus()
+	s5 := sc.StatusCode()
 
 	if s5.String() != "Error" {
 		t.Error("status string should have returned Error")
 	}
 
-	sc.status = Closing
+	sc.setStatusCode(Closing)
 
-	s6 := sc.getStatus()
+	s6 := sc.StatusCode()
 
 	if s6.String() != "Closing" {
 		t.Error("status string should have returned Error")
@@ -386,7 +386,7 @@ func TestStatus(t *testing.T) {
 
 	sc.status = 33
 
-	s7 := sc.getStatus()
+	s7 := sc.StatusCode()
 
 	fmt.Println(s7.String())
 	if s7.String() != "Status not found" {
@@ -397,14 +397,12 @@ func TestStatus(t *testing.T) {
 		status: NotConnected,
 	}
 
-	cc.getStatus()
 	cc.Status()
 
 	cc2 := &Client{
 		status: 9,
 	}
 
-	cc2.getStatus()
 	cc2.Status()
 }
 
@@ -490,7 +488,7 @@ func TestServerWrongMessageType(t *testing.T) {
 	<-connected2
 
 	// test wrong message type
-	cc.Write(2, []byte("hello server 1"))
+	_ = cc.Write(2, []byte("hello server 1"))
 
 	<-complete
 }
@@ -561,7 +559,7 @@ func TestClientWrongMessageType(t *testing.T) {
 
 	<-connected
 	<-connected2
-	sc.Write(2, []byte(""))
+	_ = sc.Write(2, []byte(""))
 
 	<-complete
 }
@@ -628,7 +626,7 @@ func TestServerCorrectMessageType(t *testing.T) {
 	<-connected
 	<-connected2
 
-	sc.Write(5, []byte(""))
+	_ = sc.Write(5, []byte(""))
 
 	<-complete
 }
@@ -698,7 +696,7 @@ func TestClientCorrectMessageType(t *testing.T) {
 	<-connected2
 	<-connected
 
-	cc.Write(5, []byte(""))
+	_ = cc.Write(5, []byte(""))
 	<-complete
 }
 func TestServerSendMessage(t *testing.T) {
@@ -774,7 +772,7 @@ func TestServerSendMessage(t *testing.T) {
 	<-connected2
 	<-connected
 
-	sc.Write(5, []byte("Here is a test message sent from the server to the client... -/and some more test data to pad it out a bit"))
+	_ = sc.Write(5, []byte("Here is a test message sent from the server to the client... -/and some more test data to pad it out a bit"))
 
 	<-complete
 }
@@ -851,7 +849,7 @@ func TestClientSendMessage(t *testing.T) {
 	<-connected
 	<-connected2
 
-	cc.Write(5, []byte("Here is a test message sent from the client to the server... -/and some more test data to pad it out a bit"))
+	_ = cc.Write(5, []byte("Here is a test message sent from the client to the server... -/and some more test data to pad it out a bit"))
 
 	<-complete
 }
@@ -869,9 +867,6 @@ func TestEncryptionFunctions(t *testing.T) {
 	if bytesToPublicKey(buff) != nil {
 		t.Error("should have failed as buff is 0 bytes")
 	}
-
-
-
 }
 
 func TestNoEncrytion(t *testing.T) {
@@ -936,8 +931,8 @@ func TestNoEncrytion(t *testing.T) {
 	<-connected
 	<-connected2
 
-	sc.Write(2, []byte("Message to client"))
-	cc.Write(2, []byte("Message to server"))
+	_ = sc.Write(2, []byte("Message to client"))
+	_ = cc.Write(2, []byte("Message to server"))
 
 	<-complete
 	<-complete2
@@ -1289,7 +1284,7 @@ func TestServerReconnect(t *testing.T) {
 	for {
 
 		m, _ := c2.Read()
-		if m.Status == "Connected" {
+		if m != nil && m.Status == "Connected" {
 			break
 		}
 	}
@@ -1486,7 +1481,6 @@ func TestServerReceiveWrongVersionNumber(t *testing.T) {
 			cc.handshakeSendReply(1)
 			return
 		}
-
 	}()
 
 	for {

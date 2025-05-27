@@ -3,6 +3,7 @@ package ipc
 import (
 	"crypto/cipher"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,7 @@ type Server struct {
 	maxMsgSize int
 	enc        *encryption
 	unMask     bool
+	sync.RWMutex
 }
 
 // Client - holds the details of the client connection and config.
@@ -26,7 +28,7 @@ type Client struct {
 	Name          string
 	conn          net.Conn
 	status        Status
-	timeout       float64       //
+	timeout       float64
 	retryTimer    time.Duration // number of seconds before trying to connect again
 	received      chan (*Message)
 	toWrite       chan (*Message)
@@ -34,12 +36,13 @@ type Client struct {
 	encryptionReq bool
 	maxMsgSize    int
 	enc           *encryption
+	sync.RWMutex
 }
 
 // Message - contains the received message
 type Message struct {
 	Err     error  // details of any error
-	MsgType int    // 0 = reserved , -1 is an internal message (disconnection or error etc), all messages recieved will be > 0
+	MsgType int    // 0 = reserved , -1 is an internal message (disconnection or error etc), all messages received will be > 0
 	Data    []byte // message data received
 	Status  string // the status of the connection
 }
@@ -57,8 +60,8 @@ const (
 	Connecting
 	// Connected - 3
 	Connected
-	// ReConnecting - 4
-	ReConnecting
+	// Reconnecting - 4
+	Reconnecting
 	// Closed - 5
 	Closed
 	// Closing - 6

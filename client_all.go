@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -17,8 +17,7 @@ var ClientConnectionClosed = errors.New("client has closed the connection")
 // ipcName = is the name of the unix socket or named pipe that the client will try and connect to.
 func StartClient(ipcName string, config *ClientConfig) (*Client, error) {
 
-	err := checkIpcName(ipcName)
-	if err != nil {
+	if err := checkIpcName(ipcName); err != nil {
 		return nil, err
 
 	}
@@ -30,31 +29,22 @@ func StartClient(ipcName string, config *ClientConfig) (*Client, error) {
 		toWrite:  make(chan *Message),
 	}
 
-	if config == nil {
+	cc.timeout = 0
+	cc.retryTimer = 20 * time.Second
+	cc.encryptionReq = true
 
-		cc.timeout = 0
-		cc.retryTimer = time.Duration(20)
-		cc.encryptionReq = true
-
-	} else {
-
-		if config.Timeout < 0 {
+	if config != nil {
+		cc.timeout = config.Timeout
+		if cc.timeout < 0 {
 			cc.timeout = 0
-		} else {
-			cc.timeout = config.Timeout
 		}
 
-		if config.RetryTimer < 1 {
-			cc.retryTimer = time.Duration(1)
-		} else {
-			cc.retryTimer = time.Duration(config.RetryTimer)
+		cc.retryTimer = config.RetryTimer
+		if cc.retryTimer < time.Second {
+			cc.retryTimer = time.Second
 		}
 
-		if !config.Encryption {
-			cc.encryptionReq = false
-		} else {
-			cc.encryptionReq = true // defualt is to always enforce encryption
-		}
+		cc.encryptionReq = config.Encryption
 	}
 
 	go startClient(cc)
@@ -64,17 +54,16 @@ func StartClient(ipcName string, config *ClientConfig) (*Client, error) {
 
 func startClient(c *Client) {
 
-	c.status = Connecting
-	c.received <- &Message{Status: c.status.String(), MsgType: -1}
+	c.setStatusCode(Connecting)
+	c.received <- &Message{Status: c.Status(), MsgType: -1}
 
-	err := c.dial()
-	if err != nil {
+	if err := c.dial(); err != nil {
 		c.received <- &Message{Err: err, MsgType: -1}
 		return
 	}
 
-	c.status = Connected
-	c.received <- &Message{Status: c.status.String(), MsgType: -1}
+	c.setStatusCode(Connected)
+	c.received <- &Message{Status: c.Status(), MsgType: -1}
 
 	go c.read()
 	go c.write()
@@ -84,67 +73,63 @@ func (c *Client) read() {
 	bLen := make([]byte, 4)
 
 	for {
-
-		res := c.readData(bLen)
-		if !res {
-			break
+		if res := c.readData(bLen); !res {
+			return
 		}
 
 		mLen := bytesToInt(bLen)
 
 		msgRecvd := make([]byte, mLen)
 
-		res = c.readData(msgRecvd)
-		if !res {
-			break
+		if res := c.readData(msgRecvd); !res {
+			return
 		}
 
 		if c.encryption {
 			msgFinal, err := decrypt(*c.enc.cipher, msgRecvd)
 			if err != nil {
-				break
+				slog.Error("Unable to decrypt message", "err", err)
+				continue
 			}
 
-			if bytesToInt(msgFinal[:4]) == 0 {
-				//  type 0 = control message
-			} else {
+			if bytesToInt(msgFinal[:4]) != 0 {
 				c.received <- &Message{Data: msgFinal[4:], MsgType: bytesToInt(msgFinal[:4])}
 			}
+			continue
+		}
 
-		} else {
-
-			if bytesToInt(msgRecvd[:4]) == 0 {
-				//  type 0 = control message
-			} else {
-				c.received <- &Message{Data: msgRecvd[4:], MsgType: bytesToInt(msgRecvd[:4])}
-			}
+		if bytesToInt(msgRecvd[:4]) != 0 {
+			c.received <- &Message{Data: msgRecvd[4:], MsgType: bytesToInt(msgRecvd[:4])}
 		}
 	}
 }
 
 func (c *Client) readData(buff []byte) bool {
 
-	_, err := io.ReadFull(c.conn, buff)
-	if err != nil {
+	if _, err := io.ReadFull(c.conn, buff); err != nil {
 		if strings.Contains(err.Error(), "EOF") { // the connection has been closed by the client.
-			c.conn.Close()
+			_ = c.conn.Close()
 
-			if c.status != Closing || c.status == Closed {
+			if c.StatusCode() != Closing || c.StatusCode() == Closed {
 				go c.reconnect()
+				return false
 			}
+
+			slog.Error("Read channel closed unexpectedly", "status", c.Status(), "err", err)
 			return false
 		}
 
-		if c.status == Closing {
-			c.status = Closed
-			c.received <- &Message{Status: c.status.String(), MsgType: -1}
+		if c.StatusCode() == Closing {
+			c.setStatusCode(Closed)
+			c.received <- &Message{Status: c.Status(), MsgType: -1}
 			c.received <- &Message{Err: ClientConnectionClosed, MsgType: -2}
 			return false
 		}
 
+		slog.Error("Unable to read data", "err", err)
+
 		// other read error
 		return false
-
 	}
 
 	return true
@@ -153,22 +138,28 @@ func (c *Client) readData(buff []byte) bool {
 
 func (c *Client) reconnect() {
 
-	c.status = ReConnecting
-	c.received <- &Message{Status: c.status.String(), MsgType: -1}
+	slog.Info("Attempting to reconnect IPC read channel")
 
-	err := c.dial() // connect to the pipe
-	if err != nil {
+	c.setStatusCode(Reconnecting)
+	c.received <- &Message{Status: c.Status(), MsgType: -1}
+
+	// connect to the pipe
+	if err := c.dial(); err != nil {
 		if err.Error() == "timed out trying to connect" {
-			c.status = Timeout
-			c.received <- &Message{Status: c.status.String(), MsgType: -1}
+			c.setStatusCode(Timeout)
+			c.received <- &Message{Status: c.Status(), MsgType: -1}
 			c.received <- &Message{Err: errors.New("timed out trying to re-connect"), MsgType: -1}
 		}
+
+		slog.Error("Unable to dial to the pipe", "err", err)
 
 		return
 	}
 
-	c.status = Connected
-	c.received <- &Message{Status: c.status.String(), MsgType: -1}
+	slog.Info("Reconnected IPC read channel")
+
+	c.setStatusCode(Connected)
+	c.received <- &Message{Status: c.Status(), MsgType: -1}
 
 	go c.read()
 }
@@ -220,12 +211,11 @@ func (c *Client) Write(msgType int, message []byte) error {
 		return errors.New("Message type 0 is reserved")
 	}
 
-	if c.status != Connected {
-		return errors.New(c.status.String())
+	if c.StatusCode() != Connected {
+		return errors.New(c.Status())
 	}
 
-	mlen := len(message)
-	if mlen > c.maxMsgSize {
+	if len(message) > c.maxMsgSize {
 		return errors.New("Message exceeds maximum message length")
 	}
 
@@ -242,8 +232,8 @@ func (c *Client) WriteWithContext(ctx context.Context, msgType int, message []by
 		return errors.New("Message type 0 is reserved")
 	}
 
-	if c.status != Connected {
-		return errors.New(c.status.String())
+	if c.StatusCode() != Connected {
+		return errors.New(c.Status())
 	}
 
 	if len(message) > c.maxMsgSize {
@@ -262,11 +252,10 @@ func (c *Client) WriteWithContext(ctx context.Context, msgType int, message []by
 func (c *Client) write() {
 
 	for {
-
 		m, ok := <-c.toWrite
-
 		if !ok {
-			break
+			slog.Info("Closing write channel")
+			return
 		}
 
 		toSend := intToBytes(m.MsgType)
@@ -277,51 +266,50 @@ func (c *Client) write() {
 			toSend = append(toSend, m.Data...)
 			toSendEnc, err := encrypt(*c.enc.cipher, toSend)
 			if err != nil {
-				log.Println("error encrypting data", err)
+				slog.Error("Unable to encrypt data", "err", err)
 				continue
 			}
 			toSend = toSendEnc
 		} else {
-
 			toSend = append(toSend, m.Data...)
-
 		}
 
 		writer.Write(intToBytes(len(toSend)))
 		writer.Write(toSend)
 
-		err := writer.Flush()
-		if err != nil {
-			log.Println("error flushing data", err)
-			continue
+		if err := writer.Flush(); err != nil {
+			slog.Error("Unable to flush data", "err", err)
 		}
-
 	}
 }
 
-// getStatus - get the current status of the connection
-func (c *Client) getStatus() Status {
-
-	return c.status
+// setStatusCode - sets the current connection status
+func (c *Client) setStatusCode(status Status) {
+	c.Lock()
+	defer c.Unlock()
+	c.status = status
 }
 
 // StatusCode - returns the current connection status
 func (c *Client) StatusCode() Status {
+	c.RLock()
+	defer c.RUnlock()
 	return c.status
 }
 
 // Status - returns the current connection status as a string
 func (c *Client) Status() string {
-
+	c.RLock()
+	defer c.RUnlock()
 	return c.status.String()
 }
 
 // Close - closes the connection
 func (c *Client) Close() {
 
-	c.status = Closing
+	c.setStatusCode(Closing)
 
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 }

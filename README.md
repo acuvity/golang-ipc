@@ -74,7 +74,7 @@ All received messages are formated into the type Message
 
 type Message struct {
 	Err     error  // details of any error
-	MsgType int    // 0 = reserved , -1 is an internal message (disconnection or error etc), all messages recieved will be > 0
+	MsgType int    // 0 = reserved , -1 is an internal message (disconnection or error etc), all messages received will be > 0
 	Data    []byte // message data received
 	Status  string // the status of the connection
 }

@@ -16,7 +16,7 @@ func (status *Status) String() string {
 		return "Listening"
 	case Closing:
 		return "Closing"
-	case ReConnecting:
+	case Reconnecting:
 		return "Reconnecting"
 	case Timeout:
 		return "Timeout"
