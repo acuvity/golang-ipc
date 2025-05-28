@@ -85,7 +85,7 @@ func TestStartUp_Configs(t *testing.T) {
 		// test would not work in windows
 		// can check test_perm.sock in /tmp after running tests to see perms
 
-		time.Sleep(time.Second / 4)
+		time.Sleep(100 * time.Millisecond)
 
 		info, err := os.Stat(srv.listen.Addr().String())
 		if err != nil {
@@ -152,7 +152,7 @@ func TestWrite(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test10", nil)
 	if err2 != nil {
@@ -413,7 +413,7 @@ func TestGetConnected(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 2)
+	time.Sleep(200 * time.Millisecond)
 
 	cc, err2 := StartClient("test22", nil)
 	if err2 != nil {
@@ -437,7 +437,7 @@ func TestServerWrongMessageType(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test333", nil)
 	if err2 != nil {
@@ -499,7 +499,7 @@ func TestClientWrongMessageType(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test3", nil)
 	if err2 != nil {
@@ -570,7 +570,7 @@ func TestServerCorrectMessageType(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test358", nil)
 	if err2 != nil {
@@ -638,7 +638,7 @@ func TestClientCorrectMessageType(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test355", nil)
 	if err2 != nil {
@@ -706,7 +706,7 @@ func TestServerSendMessage(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test377", nil)
 	if err2 != nil {
@@ -783,7 +783,7 @@ func TestClientSendMessage(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test3661", nil)
 	if err2 != nil {
@@ -863,7 +863,7 @@ func TestNoEncrytion(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	config2 := &ClientConfig{Encryption: false}
 
@@ -931,7 +931,7 @@ func TestServerWrongEncrytion(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	config2 := &ClientConfig{Encryption: true}
 
@@ -972,7 +972,7 @@ func TestClientClose(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err := StartClient("test10A", nil)
 	if err != nil {
@@ -1022,7 +1022,7 @@ func TestServerClose(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test1010", nil)
 	if err2 != nil {
@@ -1071,7 +1071,7 @@ func TestClientReconnect(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test127", nil)
 	if err2 != nil {
@@ -1143,7 +1143,7 @@ func TestClientReconnectTimeout(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	config := &ClientConfig{
 		Timeout:    2,
@@ -1284,7 +1284,7 @@ func TestServerReconnect2(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	cc, err2 := StartClient("test337", nil)
 	if err2 != nil {
@@ -1361,7 +1361,7 @@ func TestClientReadClose(t *testing.T) {
 		t.Error(err)
 	}
 
-	time.Sleep(time.Second / 4)
+	time.Sleep(100 * time.Millisecond)
 
 	config := &ClientConfig{
 		Timeout:    2,
@@ -1442,17 +1442,20 @@ func TestServerReceiveWrongVersionNumber(t *testing.T) {
 	go func() {
 
 		cc := &Client{
-			Name:          "",
+			Name:          "test5",
 			status:        NotConnected,
 			received:      make(chan *Message),
 			encryptionReq: false,
 		}
 
-		time.Sleep(3 * time.Second)
+		time.Sleep(250 * time.Millisecond)
 
 		base := "/tmp/"
 		sock := ".sock"
-		conn, _ := net.Dial("unix", base+"test5"+sock)
+		conn, err := net.Dial("unix", base+"test5"+sock)
+		if err != nil {
+			t.Error(err)
+		}
 
 		cc.conn = conn
 
@@ -1472,7 +1475,6 @@ func TestServerReceiveWrongVersionNumber(t *testing.T) {
 
 		m, err := sc.Read()
 		if err != nil {
-			fmt.Println(err)
 			return
 		}
 
@@ -1542,7 +1544,7 @@ func TestServerWrongVersionNumber(t *testing.T) {
 
 	}()
 
-	time.Sleep(time.Second)
+	time.Sleep(250 * time.Millisecond)
 
 	cc, err := StartClient("test6", nil)
 	if err != nil {
