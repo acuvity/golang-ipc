@@ -6,7 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"strings"
+	"net"
 	"time"
 )
 
@@ -57,23 +57,29 @@ func startClient(c *Client) {
 	c.setStatusCode(Connecting)
 	c.received <- &Message{Status: c.Status(), MsgType: -1}
 
-	if err := c.dial(); err != nil {
+	conn, err := c.dial()
+	if err != nil {
 		c.received <- &Message{Err: err, MsgType: -1}
 		return
 	}
 
+	c.conn = conn
+
 	c.setStatusCode(Connected)
 	c.received <- &Message{Status: c.Status(), MsgType: -1}
 
-	go c.read()
+	go c.read(conn)
 	go c.write()
 }
 
-func (c *Client) read() {
+func (c *Client) read(conn net.Conn) {
+
+	slog.Debug("Starting read for new connection")
+
 	bLen := make([]byte, 4)
 
 	for {
-		if res := c.readData(bLen); !res {
+		if res := c.readData(conn, bLen); !res {
 			return
 		}
 
@@ -81,7 +87,7 @@ func (c *Client) read() {
 
 		msgRecvd := make([]byte, mLen)
 
-		if res := c.readData(msgRecvd); !res {
+		if res := c.readData(conn, msgRecvd); !res {
 			return
 		}
 
@@ -104,29 +110,31 @@ func (c *Client) read() {
 	}
 }
 
-func (c *Client) readData(buff []byte) bool {
+func (c *Client) readData(conn net.Conn, buff []byte) bool {
 
-	if _, err := io.ReadFull(c.conn, buff); err != nil {
-		if strings.Contains(err.Error(), "EOF") { // the connection has been closed by the client.
-			_ = c.conn.Close()
+	if _, err := io.ReadFull(conn, buff); err != nil {
+
+		if errors.Is(err, io.EOF) { // the connection has been closed by the client.
+			slog.Debug("Stopping read due to EOF", "status", c.Status())
+			_ = conn.Close()
 
 			if c.StatusCode() != Closing || c.StatusCode() == Closed {
 				go c.reconnect()
 				return false
 			}
 
-			slog.Error("Read channel closed unexpectedly", "status", c.Status(), "err", err)
 			return false
 		}
 
 		if c.StatusCode() == Closing {
+			slog.Debug("Stopping read due to closing connection")
 			c.setStatusCode(Closed)
 			c.received <- &Message{Status: c.Status(), MsgType: -1}
 			c.received <- &Message{Err: ClientConnectionClosed, MsgType: -2}
 			return false
 		}
 
-		slog.Error("Unable to read data", "err", err)
+		slog.Error("Unable to read data from server", "err", err)
 
 		// other read error
 		return false
@@ -138,13 +146,14 @@ func (c *Client) readData(buff []byte) bool {
 
 func (c *Client) reconnect() {
 
-	slog.Info("Attempting to reconnect IPC read channel")
+	slog.Info("Attempting to reconnect IPC channel")
 
 	c.setStatusCode(Reconnecting)
 	c.received <- &Message{Status: c.Status(), MsgType: -1}
 
 	// connect to the pipe
-	if err := c.dial(); err != nil {
+	conn, err := c.dial()
+	if err != nil {
 		if err.Error() == "timed out trying to connect" {
 			c.setStatusCode(Timeout)
 			c.received <- &Message{Status: c.Status(), MsgType: -1}
@@ -156,15 +165,17 @@ func (c *Client) reconnect() {
 		return
 	}
 
-	slog.Info("Reconnected IPC read channel")
+	slog.Info("Reconnected IPC channel")
+
+	c.conn = conn
 
 	c.setStatusCode(Connected)
 	c.received <- &Message{Status: c.Status(), MsgType: -1}
 
-	go c.read()
+	go c.read(conn)
 }
 
-// Read - blocking function that receices messages
+// Read - blocking function that receives messages
 // if MsgType is a negative number its an internal message
 func (c *Client) Read() (*Message, error) {
 
@@ -250,6 +261,8 @@ func (c *Client) WriteWithContext(ctx context.Context, msgType int, message []by
 }
 
 func (c *Client) write() {
+
+	slog.Debug("Starting write for new connection")
 
 	for {
 		m, ok := <-c.toWrite

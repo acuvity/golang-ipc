@@ -974,8 +974,8 @@ func TestClientClose(t *testing.T) {
 
 	time.Sleep(time.Second / 4)
 
-	cc, err2 := StartClient("test10A", nil)
-	if err2 != nil {
+	cc, err := StartClient("test10A", nil)
+	if err != nil {
 		t.Error(err)
 	}
 
@@ -1463,7 +1463,7 @@ func TestServerReceiveWrongVersionNumber(t *testing.T) {
 		}
 
 		if recv[0] != 4 {
-			cc.handshakeSendReply(1)
+			cc.handshakeSendReply(conn, 1)
 			return
 		}
 	}()

@@ -49,7 +49,7 @@ func (s *Server) run() error {
 }
 
 // Client connect to the unix socket created by the server -  for unix and linux
-func (c *Client) dial() error {
+func (c *Client) dial() (net.Conn, error) {
 
 	socketPath := unixSockBase + c.Name + unixSockSuffix
 
@@ -59,7 +59,7 @@ func (c *Client) dial() error {
 		if c.timeout != 0 {
 			if time.Since(startTime).Seconds() > c.timeout {
 				c.setStatusCode(Closed)
-				return errors.New("timed out trying to connect")
+				return nil, errors.New("timed out trying to connect")
 			}
 		}
 
@@ -73,13 +73,7 @@ func (c *Client) dial() error {
 				slog.Warn("Waiting for client dial to succeed", "err", err)
 			}
 		} else {
-			c.conn = conn
-
-			if err = c.handshake(); err != nil {
-				return err
-			}
-
-			return nil
+			return conn, c.handshake(conn)
 		}
 
 		time.Sleep(c.retryTimer)

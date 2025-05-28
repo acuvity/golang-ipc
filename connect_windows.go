@@ -3,6 +3,7 @@ package ipc
 import (
 	"errors"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -37,7 +38,7 @@ func (s *Server) run() error {
 
 // Client function
 // dial - attempts to connect to a named pipe created by the server
-func (c *Client) dial() error {
+func (c *Client) dial() (net.Conn, error) {
 
 	pipePath := pipeBase + c.Name
 
@@ -47,26 +48,20 @@ func (c *Client) dial() error {
 		if c.timeout != 0 {
 			if time.Since(startTime).Seconds() > c.timeout {
 				c.setStatusCode(Closed)
-				return errors.New("timed out trying to connect")
+				return nil, errors.New("timed out trying to connect")
 			}
 		}
 
 		pn, err := winio.DialPipe(pipePath, nil)
 		if err != nil {
 			if !strings.Contains(strings.ToLower(err.Error()), "the system cannot find the file specified.") {
-				return err
+				return nil, err
 			}
 			if i%30 == 29 {
 				slog.Warn("Waiting for client dial to succeed", "err", err)
 			}
 		} else {
-			c.conn = pn
-
-			if err = c.handshake(); err != nil {
-				return err
-			}
-
-			return nil
+			return pn, c.handshake(pn)
 		}
 
 		time.Sleep(c.retryTimer)

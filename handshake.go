@@ -5,35 +5,29 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 )
 
 // 1st message sent from the server
 // byte 0 = protocol version no.
 // byte 1 = whether encryption is to be used - 0 no , 1 = encryption
-func (sc *Server) handshake() error {
+func (sc *Server) handshake(conn net.Conn) error {
 
-	err := sc.one()
-	if err != nil {
+	if err := sc.one(conn); err != nil {
 		return err
 	}
 
 	if sc.encryption {
-		err = sc.startEncryption()
-		if err != nil {
+		if err := sc.startEncryption(conn); err != nil {
 			return err
 		}
 	}
 
-	err = sc.msgLength()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return sc.msgLength(conn)
 
 }
 
-func (sc *Server) one() error {
+func (sc *Server) one(conn net.Conn) error {
 
 	buff := make([]byte, 2)
 
@@ -45,15 +39,13 @@ func (sc *Server) one() error {
 		buff[1] = byte(0)
 	}
 
-	_, err := sc.conn.Write(buff)
-	if err != nil {
+	if _, err := conn.Write(buff); err != nil {
 		return errors.New("unable to send handshake ")
 	}
 
 	recv := make([]byte, 1)
-	_, err = sc.conn.Read(recv)
-	if err != nil {
-		return errors.New("failed to received handshake reply")
+	if _, err := conn.Read(recv); err != nil {
+		return errors.New("failed to receive handshake reply")
 	}
 
 	switch result := recv[0]; result {
@@ -65,16 +57,14 @@ func (sc *Server) one() error {
 		return errors.New("client is enforcing encryption")
 	case 3:
 		return errors.New("server failed to get handshake reply")
-
+	default:
+		return errors.New("other error - handshake failed")
 	}
-
-	return errors.New("other error - handshake failed")
-
 }
 
-func (sc *Server) startEncryption() error {
+func (sc *Server) startEncryption(conn net.Conn) error {
 
-	shared, err := sc.keyExchange()
+	shared, err := sc.keyExchange(conn)
 	if err != nil {
 		return err
 	}
@@ -94,7 +84,7 @@ func (sc *Server) startEncryption() error {
 
 }
 
-func (sc *Server) msgLength() error {
+func (sc *Server) msgLength(conn net.Conn) error {
 
 	toSend := make([]byte, 4)
 
@@ -109,22 +99,18 @@ func (sc *Server) msgLength() error {
 
 		binary.BigEndian.PutUint32(toSend, uint32(len(maxMsg)))
 		toSend = append(toSend, maxMsg...)
-
 	} else {
-
 		binary.BigEndian.PutUint32(toSend, uint32(len(buff)))
 		toSend = append(toSend, buff...)
 	}
 
-	_, err := sc.conn.Write(toSend)
-	if err != nil {
+	if _, err := conn.Write(toSend); err != nil {
 		return errors.New("unable to send max message length ")
 	}
 
 	reply := make([]byte, 1)
 
-	_, err = sc.conn.Read(reply)
-	if err != nil {
+	if _, err := conn.Read(reply); err != nil {
 		return errors.New("did not received message length reply")
 	}
 
@@ -133,62 +119,49 @@ func (sc *Server) msgLength() error {
 }
 
 // 1st message received by the client
-func (cc *Client) handshake() error {
+func (cc *Client) handshake(conn net.Conn) error {
 
-	err := cc.one()
-	if err != nil {
+	if err := cc.one(conn); err != nil {
 		return err
 	}
 
 	if cc.encryption {
-		err := cc.startEncryption()
-		if err != nil {
+		if err := cc.startEncryption(conn); err != nil {
 			return err
 		}
 	}
 
-	err = cc.msgLength()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return cc.msgLength(conn)
 
 }
 
-func (cc *Client) one() error {
+func (cc *Client) one(conn net.Conn) error {
 
 	recv := make([]byte, 2)
-	_, err := cc.conn.Read(recv)
-	if err != nil {
-		return errors.New("failed to received handshake message")
+	if _, err := conn.Read(recv); err != nil {
+		return errors.New("failed to receive handshake message")
 	}
 
 	if recv[0] != version {
-		cc.handshakeSendReply(1)
+		cc.handshakeSendReply(conn, 1)
 		return errors.New("server has sent a different version number")
 	}
 
 	if recv[1] != 1 && cc.encryptionReq {
-		cc.handshakeSendReply(2)
+		cc.handshakeSendReply(conn, 2)
 		return errors.New("server tried to connect without encryption")
 	}
 
-	if recv[1] == 0 {
-		cc.encryption = false
-	} else {
-		cc.encryption = true
-	}
+	cc.encryption = recv[1] != 0
+	cc.handshakeSendReply(conn, 0) // 0 is ok
 
-	cc.handshakeSendReply(0) // 0 is ok
 	return nil
 
 }
 
-func (cc *Client) startEncryption() error {
+func (cc *Client) startEncryption(conn net.Conn) error {
 
-	shared, err := cc.keyExchange()
-
+	shared, err := cc.keyExchange(conn)
 	if err != nil {
 		return err
 	}
@@ -207,13 +180,12 @@ func (cc *Client) startEncryption() error {
 	return nil
 }
 
-func (cc *Client) msgLength() error {
+func (cc *Client) msgLength(conn net.Conn) error {
 
 	buff := make([]byte, 4)
 
-	_, err := cc.conn.Read(buff)
-	if err != nil {
-		return errors.New("failed to received max message length 1")
+	if _, err := conn.Read(buff); err != nil {
+		return errors.New("failed to receive max message length 1")
 	}
 
 	var msgLen uint32
@@ -223,38 +195,35 @@ func (cc *Client) msgLength() error {
 
 	buff = make([]byte, int(msgLen))
 
-	_, err = cc.conn.Read(buff)
+	_, err := conn.Read(buff)
 	if err != nil {
-		return errors.New("failed to received max message length 2")
+		return errors.New("failed to receive max message length 2")
 	}
 	var buff2 []byte
 	if cc.encryption {
-		buff2, err = decrypt(*cc.enc.cipher, buff)
-		if err != nil {
-			return errors.New("failed to received max message length 3")
+		if buff2, err = decrypt(*cc.enc.cipher, buff); err != nil {
+			return errors.New("failed to receive max message length 3")
 		}
-
 	} else {
 		buff2 = buff
 	}
 
 	var maxMsgSize uint32
-	if err := binary.Read(bytes.NewReader(buff2), binary.BigEndian, &maxMsgSize); err != nil { // message length
+	if err = binary.Read(bytes.NewReader(buff2), binary.BigEndian, &maxMsgSize); err != nil { // message length
 		return fmt.Errorf("unable to read message length: %w", err)
 	}
 
 	cc.maxMsgSize = int(maxMsgSize)
-	cc.handshakeSendReply(0)
+	cc.handshakeSendReply(conn, 0)
 
 	return nil
 
 }
 
-func (cc *Client) handshakeSendReply(result byte) {
+func (cc *Client) handshakeSendReply(conn net.Conn, result byte) {
 
 	buff := make([]byte, 1)
 	buff[0] = result
 
-	cc.conn.Write(buff)
-
+	conn.Write(buff)
 }

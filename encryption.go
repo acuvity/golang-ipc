@@ -12,7 +12,7 @@ import (
 	"net"
 )
 
-func (sc *Server) keyExchange() ([32]byte, error) {
+func (sc *Server) keyExchange(conn net.Conn) ([32]byte, error) {
 	var shared [32]byte
 
 	curve := ecdh.X25519()
@@ -24,12 +24,12 @@ func (sc *Server) keyExchange() ([32]byte, error) {
 	pub := priv.PublicKey()
 
 	// Send server's public key
-	if err := sendPublic(sc.conn, pub.Bytes()); err != nil {
+	if err := sendPublic(conn, pub.Bytes()); err != nil {
 		return shared, fmt.Errorf("unable to send public server key: %w", err)
 	}
 
 	// Receive client's public key
-	pubBytes, err := recvPublic(sc.conn)
+	pubBytes, err := recvPublic(conn)
 	if err != nil {
 		return shared, fmt.Errorf("unable to receive client key: %w", err)
 	}
@@ -49,7 +49,7 @@ func (sc *Server) keyExchange() ([32]byte, error) {
 	return shared, nil
 }
 
-func (cc *Client) keyExchange() ([32]byte, error) {
+func (cc *Client) keyExchange(conn net.Conn) ([32]byte, error) {
 	var shared [32]byte
 
 	curve := ecdh.X25519()
@@ -61,7 +61,7 @@ func (cc *Client) keyExchange() ([32]byte, error) {
 	pub := priv.PublicKey()
 
 	// Receive server's public key
-	pubRecvd, err := recvPublic(cc.conn)
+	pubRecvd, err := recvPublic(conn)
 	if err != nil {
 		return shared, fmt.Errorf("unable to receive public server key: %w", err)
 	}
@@ -72,7 +72,7 @@ func (cc *Client) keyExchange() ([32]byte, error) {
 	}
 
 	// Send client's public key
-	if err := sendPublic(cc.conn, pub.Bytes()); err != nil {
+	if err := sendPublic(conn, pub.Bytes()); err != nil {
 		return shared, fmt.Errorf("unable to send public client key: %w", err)
 	}
 

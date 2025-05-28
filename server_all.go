@@ -57,22 +57,26 @@ func (s *Server) acceptLoop() {
 			return
 		}
 
-		if s.StatusCode() != Listening && s.StatusCode() != Disconnected {
+		switch s.StatusCode() {
+		case Listening, Disconnected:
+		case Closing, Closed:
+			return
+		default:
 			slog.Warn("Closing connection as status is not ready", "status", s.Status())
+			_ = conn.Close()
+			continue
+		}
+
+		if err = s.handshake(conn); err != nil {
+			slog.Error("Closing connection due to handshake error", "err", err)
+			s.received <- &Message{Err: err, MsgType: -1}
 			_ = conn.Close()
 			continue
 		}
 
 		s.conn = conn
 
-		if err = s.handshake(); err != nil {
-			slog.Error("Closing connection due to handshake error", "err", err)
-			s.received <- &Message{Err: err, MsgType: -1}
-			_ = s.conn.Close()
-			continue
-		}
-
-		go s.read()
+		go s.read(conn)
 		go s.write()
 
 		s.setStatusCode(Connected)
@@ -80,14 +84,16 @@ func (s *Server) acceptLoop() {
 	}
 }
 
-func (s *Server) read() {
+func (s *Server) read(conn net.Conn) {
 
-	defer func() { _ = s.conn.Close() }()
+	slog.Debug("Starting read for new connection")
+
+	defer func() { _ = conn.Close() }()
 
 	bLen := make([]byte, 4)
 
 	for {
-		if res := s.readData(bLen); !res {
+		if res := s.readData(conn, bLen); !res {
 			return
 		}
 
@@ -95,7 +101,7 @@ func (s *Server) read() {
 
 		msgRecvd := make([]byte, mLen)
 
-		if res := s.readData(msgRecvd); !res {
+		if res := s.readData(conn, msgRecvd); !res {
 			return
 		}
 
@@ -118,24 +124,26 @@ func (s *Server) read() {
 	}
 }
 
-func (s *Server) readData(buff []byte) bool {
+func (s *Server) readData(conn net.Conn, buff []byte) bool {
 
-	if _, err := io.ReadFull(s.conn, buff); err != nil {
+	if _, err := io.ReadFull(conn, buff); err != nil {
 
 		if s.StatusCode() == Closing {
+			slog.Debug("Stopping read due to closing connection")
 			s.setStatusCode(Closed)
 			s.received <- &Message{Status: s.Status(), MsgType: -1}
 			s.received <- &Message{Err: ServerConnectionClosed, MsgType: -1}
 			return false
 		}
 
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
+			slog.Debug("Stopping read due to EOF", "status", s.Status())
 			s.setStatusCode(Disconnected)
 			s.received <- &Message{Status: s.Status(), MsgType: -1}
 			return false
 		}
 
-		slog.Error("Unable to read data", "err", err)
+		slog.Error("Unable to read data from client", "err", err)
 	}
 
 	return true
@@ -223,6 +231,8 @@ func (s *Server) WriteWithContext(ctx context.Context, msgType int, message []by
 }
 
 func (s *Server) write() {
+
+	slog.Debug("Starting write for new connection")
 
 	for {
 		m, ok := <-s.toWrite
