@@ -16,21 +16,23 @@ var ServerConnectionClosed = errors.New("server has closed the connection")
 // StartServer - starts the ipc server.
 //
 // ipcName - is the name of the unix socket or named pipe that will be created, the client needs to use the same name
-func StartServer(ipcName string, config *ServerConfig) (*Server, error) {
+func StartServer(ctx context.Context, ipcName string, config *ServerConfig) (*Server, error) {
 
 	if err := checkIpcName(ipcName); err != nil {
 		return nil, err
 	}
 
-	s := &Server{
-		name:     ipcName,
-		status:   NotConnected,
-		received: make(chan *Message),
-		toWrite:  make(chan *Message),
-	}
+	subctx, cancel := context.WithCancel(ctx)
 
-	s.maxMsgSize = maxMsgSize
-	s.encryption = true
+	s := &Server{
+		name:       ipcName,
+		status:     NotConnected,
+		cancel:     cancel,
+		maxMsgSize: maxMsgSize,
+		encryption: true,
+		received:   make(chan *Message),
+		toWrite:    make(chan *Message),
+	}
 
 	if config != nil {
 		if config.MaxMsgSize >= 1024 && config.MaxMsgSize < maxMsgSize {
@@ -41,10 +43,18 @@ func StartServer(ipcName string, config *ServerConfig) (*Server, error) {
 		s.unMask = config.UnmaskPermissions
 	}
 
-	return s, s.run()
+	return s, s.run(subctx)
 }
 
-func (s *Server) acceptLoop() {
+func (s *Server) sendMessage(ctx context.Context, sendTo chan *Message, msg *Message) {
+
+	select {
+	case sendTo <- msg:
+	case <-ctx.Done():
+	}
+}
+
+func (s *Server) acceptLoop(ctx context.Context) {
 
 	defer func() { _ = s.listen.Close() }()
 
@@ -69,31 +79,47 @@ func (s *Server) acceptLoop() {
 
 		if err = s.handshake(conn); err != nil {
 			slog.Error("Closing connection due to handshake error", "err", err)
-			s.received <- &Message{Err: err, MsgType: -1}
+			s.sendMessage(ctx, s.received, &Message{Err: err, MsgType: -1})
 			_ = conn.Close()
 			continue
 		}
 
-		s.conn = conn
-
-		go s.read(conn)
-		go s.write()
-
-		s.setStatusCode(Connected)
-		s.received <- &Message{Status: s.Status(), MsgType: -1}
+		go s.startReadWrite(ctx, conn)
 	}
 }
 
-func (s *Server) read(conn net.Conn) {
-
-	slog.Debug("Starting read for new connection")
+func (s *Server) startReadWrite(ctx context.Context, conn net.Conn) {
 
 	defer func() { _ = conn.Close() }()
+
+	// This is to support the scenario where main context
+	// is still active but the connection closes.
+	readctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		s.read(ctx, conn)
+		cancel()
+	}()
+	go s.write(readctx, conn)
+
+	s.setStatusCode(Connected)
+	s.sendMessage(ctx, s.received, &Message{Status: s.Status(), MsgType: -1})
+
+	select {
+	case <-ctx.Done():
+	case <-readctx.Done():
+	}
+}
+
+func (s *Server) read(ctx context.Context, conn net.Conn) {
+
+	slog.Debug("Starting read for new connection")
 
 	bLen := make([]byte, 4)
 
 	for {
-		if res := s.readData(conn, bLen); !res {
+		if res := s.readData(ctx, conn, bLen); !res {
 			return
 		}
 
@@ -101,45 +127,49 @@ func (s *Server) read(conn net.Conn) {
 
 		msgRecvd := make([]byte, mLen)
 
-		if res := s.readData(conn, msgRecvd); !res {
+		if res := s.readData(ctx, conn, msgRecvd); !res {
 			return
 		}
 
 		if s.encryption {
 			msgFinal, err := decrypt(*s.enc.cipher, msgRecvd)
 			if err != nil {
-				s.received <- &Message{Err: err, MsgType: -1}
+				s.sendMessage(ctx, s.received, &Message{Err: err, MsgType: -1})
 				continue
 			}
 
 			if bytesToInt(msgFinal[:4]) != 0 {
-				s.received <- &Message{Data: msgFinal[4:], MsgType: bytesToInt(msgFinal[:4])}
+				s.sendMessage(ctx, s.received, &Message{Data: msgFinal[4:], MsgType: bytesToInt(msgFinal[:4])})
 			}
 			continue
 		}
 
 		if bytesToInt(msgRecvd[:4]) != 0 {
-			s.received <- &Message{Data: msgRecvd[4:], MsgType: bytesToInt(msgRecvd[:4])}
+			s.sendMessage(ctx, s.received, &Message{Data: msgRecvd[4:], MsgType: bytesToInt(msgRecvd[:4])})
 		}
 	}
 }
 
-func (s *Server) readData(conn net.Conn, buff []byte) bool {
+func (s *Server) readData(ctx context.Context, conn net.Conn, buff []byte) bool {
 
 	if _, err := io.ReadFull(conn, buff); err != nil {
 
-		if s.StatusCode() == Closing {
+		if s.StatusCode() == Closing || errors.Is(err, net.ErrClosed) {
 			slog.Debug("Stopping read due to closing connection")
 			s.setStatusCode(Closed)
-			s.received <- &Message{Status: s.Status(), MsgType: -1}
-			s.received <- &Message{Err: ServerConnectionClosed, MsgType: -1}
+			// The context has been canceled so let's give these messages a chance
+			// to be sent but don't wait long
+			subctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			s.sendMessage(subctx, s.received, &Message{Status: s.Status(), MsgType: -1})
+			s.sendMessage(subctx, s.received, &Message{Err: ServerConnectionClosed, MsgType: -1})
 			return false
 		}
 
 		if errors.Is(err, io.EOF) {
 			slog.Debug("Stopping read due to EOF", "status", s.Status())
 			s.setStatusCode(Disconnected)
-			s.received <- &Message{Status: s.Status(), MsgType: -1}
+			s.sendMessage(ctx, s.received, &Message{Status: s.Status(), MsgType: -1})
 			return false
 		}
 
@@ -230,20 +260,28 @@ func (s *Server) WriteWithContext(ctx context.Context, msgType int, message []by
 	return nil
 }
 
-func (s *Server) write() {
+func (s *Server) write(ctx context.Context, conn net.Conn) {
+	var m *Message
+	var ok bool
 
 	slog.Debug("Starting write for new connection")
 
 	for {
-		m, ok := <-s.toWrite
+		select {
+		case <-ctx.Done():
+			slog.Debug("Stopping write due to context cancellation", "status", s.Status())
+			return
+		case m, ok = <-s.toWrite:
+		}
+
 		if !ok {
-			slog.Info("Closing write channel")
+			slog.Info("Stopping write as channel is closed")
 			return
 		}
 
 		toSend := intToBytes(m.MsgType)
 
-		writer := bufio.NewWriter(s.conn)
+		writer := bufio.NewWriter(conn)
 
 		if s.encryption {
 			toSend = append(toSend, m.Data...)
@@ -257,8 +295,8 @@ func (s *Server) write() {
 			toSend = append(toSend, m.Data...)
 		}
 
-		writer.Write(intToBytes(len(toSend)))
-		writer.Write(toSend)
+		_, _ = writer.Write(intToBytes(len(toSend)))
+		_, _ = writer.Write(toSend)
 
 		if err := writer.Flush(); err != nil {
 			slog.Error("Unable to flush data", "err", err)
@@ -299,7 +337,7 @@ func (s *Server) Close() {
 		_ = s.listen.Close()
 	}
 
-	if s.conn != nil {
-		_ = s.conn.Close()
+	if s.cancel != nil {
+		s.cancel()
 	}
 }

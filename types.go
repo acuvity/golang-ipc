@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"context"
 	"crypto/cipher"
 	"net"
 	"sync"
@@ -11,7 +12,7 @@ import (
 type Server struct {
 	name       string
 	listen     net.Listener
-	conn       net.Conn
+	cancel     context.CancelFunc
 	status     Status
 	received   chan (*Message)
 	toWrite    chan (*Message)

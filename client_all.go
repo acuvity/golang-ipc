@@ -15,7 +15,7 @@ var ClientConnectionClosed = errors.New("client has closed the connection")
 
 // StartClient - start the ipc client.
 // ipcName = is the name of the unix socket or named pipe that the client will try and connect to.
-func StartClient(ipcName string, config *ClientConfig) (*Client, error) {
+func StartClient(ctx context.Context, ipcName string, config *ClientConfig) (*Client, error) {
 
 	if err := checkIpcName(ipcName); err != nil {
 		return nil, err
@@ -47,39 +47,47 @@ func StartClient(ipcName string, config *ClientConfig) (*Client, error) {
 		cc.encryptionReq = config.Encryption
 	}
 
-	go startClient(cc)
+	go startClient(ctx, cc)
 
 	return cc, nil
 }
 
-func startClient(c *Client) {
+func startClient(ctx context.Context, c *Client) {
 
 	c.setStatusCode(Connecting)
-	c.received <- &Message{Status: c.Status(), MsgType: -1}
+	c.sendMessage(ctx, c.received, &Message{Status: c.Status(), MsgType: -1})
 
-	conn, err := c.dial()
+	conn, err := c.dial(ctx)
 	if err != nil {
-		c.received <- &Message{Err: err, MsgType: -1}
+		c.sendMessage(ctx, c.received, &Message{Err: err, MsgType: -1})
 		return
 	}
 
 	c.conn = conn
 
-	c.setStatusCode(Connected)
-	c.received <- &Message{Status: c.Status(), MsgType: -1}
-
-	go c.read(conn)
+	go c.read(ctx, conn)
 	go c.write()
+
+	c.setStatusCode(Connected)
+	c.sendMessage(ctx, c.received, &Message{Status: c.Status(), MsgType: -1})
 }
 
-func (c *Client) read(conn net.Conn) {
+func (c *Client) sendMessage(ctx context.Context, sendTo chan *Message, msg *Message) {
+
+	select {
+	case sendTo <- msg:
+	case <-ctx.Done():
+	}
+}
+
+func (c *Client) read(ctx context.Context, conn net.Conn) {
 
 	slog.Debug("Starting read for new connection")
 
 	bLen := make([]byte, 4)
 
 	for {
-		if res := c.readData(conn, bLen); !res {
+		if res := c.readData(ctx, conn, bLen); !res {
 			return
 		}
 
@@ -87,7 +95,7 @@ func (c *Client) read(conn net.Conn) {
 
 		msgRecvd := make([]byte, mLen)
 
-		if res := c.readData(conn, msgRecvd); !res {
+		if res := c.readData(ctx, conn, msgRecvd); !res {
 			return
 		}
 
@@ -99,18 +107,18 @@ func (c *Client) read(conn net.Conn) {
 			}
 
 			if bytesToInt(msgFinal[:4]) != 0 {
-				c.received <- &Message{Data: msgFinal[4:], MsgType: bytesToInt(msgFinal[:4])}
+				c.sendMessage(ctx, c.received, &Message{Data: msgFinal[4:], MsgType: bytesToInt(msgFinal[:4])})
 			}
 			continue
 		}
 
 		if bytesToInt(msgRecvd[:4]) != 0 {
-			c.received <- &Message{Data: msgRecvd[4:], MsgType: bytesToInt(msgRecvd[:4])}
+			c.sendMessage(ctx, c.received, &Message{Data: msgRecvd[4:], MsgType: bytesToInt(msgRecvd[:4])})
 		}
 	}
 }
 
-func (c *Client) readData(conn net.Conn, buff []byte) bool {
+func (c *Client) readData(ctx context.Context, conn net.Conn, buff []byte) bool {
 
 	if _, err := io.ReadFull(conn, buff); err != nil {
 
@@ -119,18 +127,22 @@ func (c *Client) readData(conn net.Conn, buff []byte) bool {
 			_ = conn.Close()
 
 			if c.StatusCode() != Closing || c.StatusCode() == Closed {
-				go c.reconnect()
+				go c.reconnect(ctx)
 				return false
 			}
 
 			return false
 		}
 
-		if c.StatusCode() == Closing {
+		if c.StatusCode() == Closing || errors.Is(err, net.ErrClosed) {
 			slog.Debug("Stopping read due to closing connection")
 			c.setStatusCode(Closed)
-			c.received <- &Message{Status: c.Status(), MsgType: -1}
-			c.received <- &Message{Err: ClientConnectionClosed, MsgType: -2}
+			// The context has been canceled so let's give these messages a chance
+			// to be sent but don't wait long
+			subctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			c.sendMessage(subctx, c.received, &Message{Status: c.Status(), MsgType: -1})
+			c.sendMessage(subctx, c.received, &Message{Err: ClientConnectionClosed, MsgType: -2})
 			return false
 		}
 
@@ -144,20 +156,20 @@ func (c *Client) readData(conn net.Conn, buff []byte) bool {
 
 }
 
-func (c *Client) reconnect() {
+func (c *Client) reconnect(ctx context.Context) {
 
 	slog.Info("Attempting to reconnect IPC channel")
 
 	c.setStatusCode(Reconnecting)
-	c.received <- &Message{Status: c.Status(), MsgType: -1}
+	c.sendMessage(ctx, c.received, &Message{Status: c.Status(), MsgType: -1})
 
 	// connect to the pipe
-	conn, err := c.dial()
+	conn, err := c.dial(ctx)
 	if err != nil {
 		if err.Error() == "timed out trying to connect" {
 			c.setStatusCode(Timeout)
-			c.received <- &Message{Status: c.Status(), MsgType: -1}
-			c.received <- &Message{Err: errors.New("timed out trying to re-connect"), MsgType: -1}
+			c.sendMessage(ctx, c.received, &Message{Status: c.Status(), MsgType: -1})
+			c.sendMessage(ctx, c.received, &Message{Err: errors.New("timed out trying to re-connect"), MsgType: -1})
 		}
 
 		slog.Error("Unable to dial to the pipe", "err", err)
@@ -170,9 +182,9 @@ func (c *Client) reconnect() {
 	c.conn = conn
 
 	c.setStatusCode(Connected)
-	c.received <- &Message{Status: c.Status(), MsgType: -1}
+	c.sendMessage(ctx, c.received, &Message{Status: c.Status(), MsgType: -1})
 
-	go c.read(conn)
+	go c.read(ctx, conn)
 }
 
 // Read - blocking function that receives messages
@@ -267,7 +279,7 @@ func (c *Client) write() {
 	for {
 		m, ok := <-c.toWrite
 		if !ok {
-			slog.Info("Closing write channel")
+			slog.Info("Stopping write as channel is closed")
 			return
 		}
 
@@ -287,8 +299,8 @@ func (c *Client) write() {
 			toSend = append(toSend, m.Data...)
 		}
 
-		writer.Write(intToBytes(len(toSend)))
-		writer.Write(toSend)
+		_, _ = writer.Write(intToBytes(len(toSend)))
+		_, _ = writer.Write(toSend)
 
 		if err := writer.Flush(); err != nil {
 			slog.Error("Unable to flush data", "err", err)

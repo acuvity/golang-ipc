@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	ipc "github.com/james-barrow/golang-ipc"
@@ -8,9 +9,12 @@ import (
 
 func main() {
 
-	go server()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	c, err := ipc.StartClient("example1", nil)
+	go server(ctx)
+
+	c, err := ipc.StartClient(ctx, "example1", nil)
 	if err != nil {
 		log.Println(err)
 		return
@@ -34,7 +38,7 @@ func main() {
 			} else {
 
 				log.Println("Client received: "+string(message.Data)+" - Message type: ", message.MsgType)
-				c.Write(5, []byte("Message from client - PONG"))
+				_ = c.Write(5, []byte("Message from client - PONG"))
 
 			}
 
@@ -46,9 +50,9 @@ func main() {
 
 }
 
-func server() {
+func server(ctx context.Context) {
 
-	s, err := ipc.StartServer("example1", nil)
+	s, err := ipc.StartServer(ctx, "example1", nil)
 	if err != nil {
 		log.Println("server error", err)
 		return
@@ -67,7 +71,7 @@ func server() {
 				if message.Status == "Connected" {
 
 					log.Println("server status", s.Status())
-					s.Write(1, []byte("server - PING"))
+					_ = s.Write(1, []byte("server - PING"))
 
 				}
 

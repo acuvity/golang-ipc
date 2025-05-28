@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net"
@@ -15,7 +16,7 @@ const pipeBase = `\\.\pipe\`
 // Server function
 // Create the named pipe (if it doesn't already exist) and start listening for a client to connect.
 // when a client connects and connection is accepted the read function is called on a go routine.
-func (s *Server) run() error {
+func (s *Server) run(ctx context.Context) error {
 
 	var config *winio.PipeConfig
 
@@ -31,14 +32,14 @@ func (s *Server) run() error {
 	s.listen = listen
 	s.setStatusCode(Listening)
 
-	go s.acceptLoop()
+	go s.acceptLoop(ctx)
 
 	return nil
 }
 
 // Client function
 // dial - attempts to connect to a named pipe created by the server
-func (c *Client) dial() (net.Conn, error) {
+func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 
 	pipePath := pipeBase + c.Name
 
@@ -64,6 +65,10 @@ func (c *Client) dial() (net.Conn, error) {
 			return pn, c.handshake(pn)
 		}
 
-		time.Sleep(c.retryTimer)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(c.retryTimer):
+		}
 	}
 }

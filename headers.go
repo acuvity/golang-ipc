@@ -18,7 +18,7 @@ func bytesToInt(b []byte) int {
 
 	var mlen uint32
 
-	binary.Read(bytes.NewReader(b[:]), binary.BigEndian, &mlen) // message length
+	_ = binary.Read(bytes.NewReader(b[:]), binary.BigEndian, &mlen) // message length
 
 	return int(mlen)
 

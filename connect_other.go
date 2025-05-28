@@ -4,6 +4,7 @@
 package ipc
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net"
@@ -19,7 +20,7 @@ const (
 )
 
 // Server create a unix socket and start listening connections - for unix and linux
-func (s *Server) run() error {
+func (s *Server) run(ctx context.Context) error {
 
 	if err := os.RemoveAll(unixSockBase + s.name + unixSockSuffix); err != nil {
 		return err
@@ -43,13 +44,13 @@ func (s *Server) run() error {
 	s.listen = listen
 	s.setStatusCode(Listening)
 
-	go s.acceptLoop()
+	go s.acceptLoop(ctx)
 
 	return nil
 }
 
 // Client connect to the unix socket created by the server -  for unix and linux
-func (c *Client) dial() (net.Conn, error) {
+func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 
 	socketPath := unixSockBase + c.Name + unixSockSuffix
 
@@ -67,7 +68,7 @@ func (c *Client) dial() (net.Conn, error) {
 		if err != nil {
 			if !strings.Contains(err.Error(), "connect: no such file or directory") &&
 				!strings.Contains(err.Error(), "connect: connection refused") {
-				c.received <- &Message{Err: err, MsgType: -1}
+				c.sendMessage(ctx, c.received, &Message{Err: err, MsgType: -1})
 			}
 			if i%30 == 29 {
 				slog.Warn("Waiting for client dial to succeed", "err", err)
@@ -76,7 +77,11 @@ func (c *Client) dial() (net.Conn, error) {
 			return conn, c.handshake(conn)
 		}
 
-		time.Sleep(c.retryTimer)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(c.retryTimer):
+		}
 	}
 
 }

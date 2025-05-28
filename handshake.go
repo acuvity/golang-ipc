@@ -40,7 +40,7 @@ func (sc *Server) one(conn net.Conn) error {
 	}
 
 	if _, err := conn.Write(buff); err != nil {
-		return errors.New("unable to send handshake ")
+		return errors.New("unable to send handshake")
 	}
 
 	recv := make([]byte, 1)
@@ -105,7 +105,7 @@ func (sc *Server) msgLength(conn net.Conn) error {
 	}
 
 	if _, err := conn.Write(toSend); err != nil {
-		return errors.New("unable to send max message length ")
+		return errors.New("unable to send max message length")
 	}
 
 	reply := make([]byte, 1)
@@ -225,5 +225,5 @@ func (cc *Client) handshakeSendReply(conn net.Conn, result byte) {
 	buff := make([]byte, 1)
 	buff[0] = result
 
-	conn.Write(buff)
+	_, _ = conn.Write(buff)
 }
