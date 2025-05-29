@@ -65,6 +65,7 @@ sec:
 	@echo "--> sec ..."
 	gosec -exclude=G103,G115,G304 -quiet ./...
 
+.PHONY: vuln
 vuln:
 	@echo "--> vulncheck ..."
 	govulncheck -show verbose ./...

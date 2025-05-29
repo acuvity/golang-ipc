@@ -1,0 +1,63 @@
+name: build-go
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GO111MODULE: on
+  GOPRIVATE: github.com/acuvity,go.acuvity.ai
+  GOPROXY: https://proxy.golang.org,direct
+  GOTOKEN: ${{ secrets.GO_PRIVATE_REPO_PAT }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go:
+          - "1.24"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: Setup
+        run: |
+          git config --global url."https://acuvity:${GOTOKEN}@github.com/acuvity".insteadOf "https://github.com/acuvity"
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install github.com/securego/gosec/v2/cmd/gosec@master
+
+      - name: Lint Check
+        run: |
+          make lint
+
+      - name: Vulnerability Check
+        run: |
+          make vuln
+
+      - name: Security Check
+        run: |
+          make sec
+
+      - name: Run Tests
+        run: |
+          make test
+
+      - uses: acuvity/cov@1.0.2
+        with:
+          main_branch: master
+          cov_file: unit_coverage.out
+          cov_threshold: "80"
+          cov_mode: coverage
