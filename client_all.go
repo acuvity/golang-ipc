@@ -172,7 +172,9 @@ func (c *Client) reconnect(ctx context.Context) {
 			c.sendMessage(ctx, c.received, &Message{Err: errors.New("timed out trying to re-connect"), MsgType: -1})
 		}
 
-		slog.Error("Unable to dial to the pipe", "err", err)
+		if !errors.Is(err, context.Canceled) {
+			slog.Error("Unable to dial to the pipe", "err", err)
+		}
 
 		return
 	}
