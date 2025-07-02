@@ -40,12 +40,12 @@ func (sc *Server) one(conn net.Conn) error {
 	}
 
 	if _, err := conn.Write(buff); err != nil {
-		return errors.New("unable to send handshake")
+		return fmt.Errorf("unable to send handshake: %w", err)
 	}
 
 	recv := make([]byte, 1)
 	if _, err := conn.Read(recv); err != nil {
-		return errors.New("failed to receive handshake reply")
+		return fmt.Errorf("failed to receive handshake reply: %w", err)
 	}
 
 	switch result := recv[0]; result {
@@ -105,13 +105,13 @@ func (sc *Server) msgLength(conn net.Conn) error {
 	}
 
 	if _, err := conn.Write(toSend); err != nil {
-		return errors.New("unable to send max message length")
+		return fmt.Errorf("unable to send max message length: %w", err)
 	}
 
 	reply := make([]byte, 1)
 
 	if _, err := conn.Read(reply); err != nil {
-		return errors.New("did not received message length reply")
+		return fmt.Errorf("did not received message length reply: %w", err)
 	}
 
 	return nil
@@ -139,7 +139,7 @@ func (cc *Client) one(conn net.Conn) error {
 
 	recv := make([]byte, 2)
 	if _, err := conn.Read(recv); err != nil {
-		return errors.New("failed to receive handshake message")
+		return fmt.Errorf("failed to receive handshake message: %w", err)
 	}
 
 	if recv[0] != version {
@@ -185,7 +185,7 @@ func (cc *Client) msgLength(conn net.Conn) error {
 	buff := make([]byte, 4)
 
 	if _, err := conn.Read(buff); err != nil {
-		return errors.New("failed to receive max message length 1")
+		return fmt.Errorf("failed to receive max message length 1: %w", err)
 	}
 
 	var msgLen uint32
@@ -197,12 +197,12 @@ func (cc *Client) msgLength(conn net.Conn) error {
 
 	_, err := conn.Read(buff)
 	if err != nil {
-		return errors.New("failed to receive max message length 2")
+		return fmt.Errorf("failed to receive max message length 2: %w", err)
 	}
 	var buff2 []byte
 	if cc.encryption {
 		if buff2, err = decrypt(*cc.enc.cipher, buff); err != nil {
-			return errors.New("failed to receive max message length 3")
+			return fmt.Errorf("failed to receive max message length 3: %w", err)
 		}
 	} else {
 		buff2 = buff
