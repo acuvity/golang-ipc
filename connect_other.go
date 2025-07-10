@@ -71,7 +71,7 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 				c.sendMessage(ctx, c.received, &Message{Err: err, MsgType: -1})
 			}
 			if i%30 == 29 {
-				slog.Warn("Waiting for client dial to succeed", "err", err)
+				slog.Debug("Waiting for client dial to succeed", "err", err)
 			}
 		} else {
 			return conn, c.handshake(conn)

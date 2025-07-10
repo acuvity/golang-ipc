@@ -59,7 +59,7 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 				return nil, err
 			}
 			if i%30 == 29 {
-				slog.Warn("Waiting for client dial to succeed", "err", err)
+				slog.Debug("Waiting for client dial to succeed", "err", err)
 			}
 		} else {
 			return pn, c.handshake(pn)
