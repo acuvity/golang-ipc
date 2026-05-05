@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -1592,7 +1593,7 @@ func TestClientReadClose(t *testing.T) {
 			m, err3 := cc.Read()
 
 			if err3 != nil {
-				if err3.Error() == "the received channel has been closed" {
+				if errors.Is(err3, ChannelClosedReceived) {
 					clientError <- true // after the connection times out the received channel is closed, so we're now testing that the close error is returned.
 					// This is the only error the received function returns.
 					break

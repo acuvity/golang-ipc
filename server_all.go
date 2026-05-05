@@ -185,7 +185,7 @@ func (s *Server) Read() (*Message, error) {
 
 	m, ok := <-s.received
 	if !ok {
-		return nil, errors.New("the received channel has been closed")
+		return nil, ChannelClosedReceived
 	}
 
 	if m.Err != nil {
@@ -201,7 +201,7 @@ func (s *Server) ReadWithContext(ctx context.Context) (*Message, error) {
 	select {
 	case m, ok := <-s.received:
 		if !ok {
-			return nil, errors.New("the received channel has been closed")
+			return nil, ChannelClosedReceived
 		}
 
 		if m.Err != nil {

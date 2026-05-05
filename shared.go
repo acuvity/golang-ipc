@@ -2,6 +2,9 @@ package ipc
 
 import "errors"
 
+// ChannelClosedReceived is the error returned when the receive channel is closed.
+var ChannelClosedReceived = errors.New("the received channel has been closed")
+
 // returns the status of the connection as a string
 func (status *Status) String() string {
 

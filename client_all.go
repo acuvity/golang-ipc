@@ -170,9 +170,10 @@ func (c *Client) reconnect(ctx context.Context) {
 			c.setStatusCode(Timeout)
 			c.sendMessage(ctx, c.received, &Message{Status: c.Status(), MsgType: -1})
 			c.sendMessage(ctx, c.received, &Message{Err: errors.New("timed out trying to re-connect"), MsgType: -1})
+			return
 		}
 
-		if !errors.Is(err, context.Canceled) {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			slog.Error("Unable to dial to the pipe", "err", err)
 			go c.reconnect(ctx)
 		}
@@ -196,12 +197,14 @@ func (c *Client) Read() (*Message, error) {
 
 	m, ok := <-c.received
 	if !ok {
-		return nil, errors.New("the received channel has been closed")
+		return nil, ChannelClosedReceived
 	}
 
 	if m.Err != nil {
-		close(c.received)
-		close(c.toWrite)
+		if c.StatusCode() == Timeout {
+			close(c.received)
+			close(c.toWrite)
+		}
 		return nil, m.Err
 	}
 
@@ -214,12 +217,14 @@ func (c *Client) ReadWithContext(ctx context.Context) (*Message, error) {
 	select {
 	case m, ok := <-c.received:
 		if !ok {
-			return nil, errors.New("the received channel has been closed")
+			return nil, ChannelClosedReceived
 		}
 
 		if m.Err != nil {
-			close(c.received)
-			close(c.toWrite)
+			if c.StatusCode() == Timeout {
+				close(c.received)
+				close(c.toWrite)
+			}
 			return nil, m.Err
 		}
 
