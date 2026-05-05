@@ -174,6 +174,7 @@ func (c *Client) reconnect(ctx context.Context) {
 
 		if !errors.Is(err, context.Canceled) {
 			slog.Error("Unable to dial to the pipe", "err", err)
+			go c.reconnect(ctx)
 		}
 
 		return
