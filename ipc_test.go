@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -30,15 +31,17 @@ func TestStartUp_Configs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv1, err := StartServer(ctx, "test", nil)
+	// Windows does not allow two servers on the same pipe.
+
+	srv1, err := StartServer(ctx, "test_cfg1", nil)
 	if err != nil {
 		t.Error(err)
 	}
 	defer srv1.Close()
 
-	client2, err2 := StartClient(ctx, "test", nil)
+	client2, err2 := StartClient(ctx, "test_cfg1", nil)
 	if err2 != nil {
-		t.Error(err)
+		t.Error(err2)
 	}
 	defer client2.Close()
 
@@ -46,51 +49,55 @@ func TestStartUp_Configs(t *testing.T) {
 
 	ccon := &ClientConfig{}
 
-	srv3, err3 := StartServer(ctx, "test", scon)
+	srv3, err3 := StartServer(ctx, "test_cfg2", scon)
 	if err3 != nil {
-		t.Error(err2)
+		t.Error(err3)
 	}
 	defer srv3.Close()
 
-	client4, err4 := StartClient(ctx, "test", ccon)
+	client4, err4 := StartClient(ctx, "test_cfg2", ccon)
 	if err4 != nil {
-		t.Error(err)
+		t.Error(err4)
 	}
 	defer client4.Close()
 
 	scon.MaxMsgSize = -1
 
-	srv5, err5 := StartServer(ctx, "test", scon)
+	srv5, err5 := StartServer(ctx, "test_cfg3", scon)
 	if err5 != nil {
-		t.Error(err2)
+		t.Error(err5)
 	}
 	defer srv5.Close()
 
 	ccon.Timeout = -1
 	ccon.RetryTimer = -1
 
-	client6, err6 := StartClient(ctx, "test", ccon)
+	client6, err6 := StartClient(ctx, "test_cfg3", ccon)
 	if err6 != nil {
-		t.Error(err)
+		t.Error(err6)
 	}
 	defer client6.Close()
 
 	scon.MaxMsgSize = 1025
 	ccon.RetryTimer = 1
 
-	srv7, err7 := StartServer(ctx, "test", scon)
+	srv7, err7 := StartServer(ctx, "test_cfg4", scon)
 	if err7 != nil {
-		t.Error(err2)
+		t.Error(err7)
 	}
 	defer srv7.Close()
 
-	client8, err8 := StartClient(ctx, "test", ccon)
+	client8, err8 := StartClient(ctx, "test_cfg4", ccon)
 	if err8 != nil {
-		t.Error(err)
+		t.Error(err8)
 	}
 	defer client8.Close()
 
 	t.Run("Unmask Server Socket Permissions", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("unix socket permissions do not apply to named pipes")
+		}
+
 		scon.UnmaskPermissions = true
 
 		srv, err := StartServer(ctx, "test_perm", scon)
@@ -201,13 +208,13 @@ func TestWrite(t *testing.T) {
 
 	buf := make([]byte, 1)
 
-	err3 := sc.Write(0, buf)
+	err3 := sc.Broadcast(0, buf)
 	if err3.Error() != "message type 0 is reserved" {
 		t.Error("0 is not allowed as a message type")
 	}
 
 	buf = make([]byte, sc.maxMsgSize+5)
-	err4 := sc.Write(2, buf)
+	err4 := sc.Broadcast(2, buf)
 
 	if err4.Error() != "message exceeds maximum message length" {
 		t.Error("There should be an error as the data we're attempting to write is bigger than the maxMsgSize")
@@ -216,7 +223,7 @@ func TestWrite(t *testing.T) {
 	sc.setStatusCode(NotConnected)
 
 	buf2 := make([]byte, 5)
-	err5 := sc.Write(2, buf2)
+	err5 := sc.Broadcast(2, buf2)
 	if err5.Error() != "Not Connected" {
 		t.Error("we should have an error becuse there is no connection")
 	}
@@ -615,7 +622,7 @@ func TestClientWrongMessageType(t *testing.T) {
 
 	<-connected
 	<-connected2
-	_ = sc.Write(2, []byte(""))
+	_ = sc.Broadcast(2, []byte(""))
 
 	<-complete
 }
@@ -693,7 +700,7 @@ func TestServerCorrectMessageType(t *testing.T) {
 	<-connected
 	<-connected2
 
-	_ = sc.Write(5, []byte(""))
+	_ = sc.Broadcast(5, []byte(""))
 
 	<-complete
 }
@@ -861,7 +868,7 @@ func TestServerSendMessage(t *testing.T) {
 	<-connected2
 	<-connected
 
-	_ = sc.Write(5, []byte("Here is a test message sent from the server to the client... -/and some more test data to pad it out a bit"))
+	_ = sc.Broadcast(5, []byte("Here is a test message sent from the server to the client... -/and some more test data to pad it out a bit"))
 
 	<-complete
 }
@@ -1029,7 +1036,7 @@ func TestNoEncrytion(t *testing.T) {
 	<-connected
 	<-connected2
 
-	_ = sc.Write(2, []byte("Message to client"))
+	_ = sc.Broadcast(2, []byte("Message to client"))
 	_ = cc.Write(2, []byte("Message to server"))
 
 	<-complete
@@ -1627,6 +1634,10 @@ func TestClientReadClose(t *testing.T) {
 }
 
 func TestServerReceiveWrongVersionNumber(t *testing.T) {
+
+	if runtime.GOOS == "windows" {
+		t.Skip("test dials a unix socket directly")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

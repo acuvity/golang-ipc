@@ -3,15 +3,28 @@ package ipc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"strings"
 	"time"
 
 	"github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 )
 
 const pipeBase = `\\.\pipe\`
+
+// sharedPipeClientAccess leaves out FILE_CREATE_PIPE_INSTANCE (part of FILE_GENERIC_WRITE), so other
+// users can connect but cannot add their own instance of the pipe to intercept clients.
+const sharedPipeClientAccess = windows.FILE_READ_DATA | windows.FILE_WRITE_DATA |
+	windows.FILE_READ_EA | windows.FILE_WRITE_EA |
+	windows.FILE_READ_ATTRIBUTES | windows.FILE_WRITE_ATTRIBUTES |
+	windows.READ_CONTROL | windows.SYNCHRONIZE
+
+// sharedPipeSDDL is used when UnmaskPermissions is set. The owner keeps full control as the server
+// needs FILE_CREATE_PIPE_INSTANCE to accept further clients.
+var sharedPipeSDDL = fmt.Sprintf("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;0x%x;;;AU)", sharedPipeClientAccess)
 
 // Server function
 // Create the named pipe (if it doesn't already exist) and start listening for a client to connect.
@@ -21,7 +34,7 @@ func (s *Server) run(ctx context.Context) error {
 	var config *winio.PipeConfig
 
 	if s.unMask {
-		config = &winio.PipeConfig{SecurityDescriptor: "D:P(A;;GA;;;AU)"}
+		config = &winio.PipeConfig{SecurityDescriptor: sharedPipeSDDL}
 	}
 
 	listen, err := winio.ListenPipe(pipeBase+s.name, config)
@@ -32,7 +45,7 @@ func (s *Server) run(ctx context.Context) error {
 	s.listen = listen
 	s.setStatusCode(Listening)
 
-	go s.acceptLoop(ctx)
+	go s.serve(ctx)
 
 	return nil
 }
@@ -61,8 +74,8 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 			if i%30 == 29 {
 				slog.Debug("Waiting for client dial to succeed", "err", err)
 			}
-		} else {
-			return pn, c.handshake(pn)
+		} else if c.setup(ctx, pn) {
+			return pn, nil
 		}
 
 		select {

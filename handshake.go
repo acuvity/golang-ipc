@@ -11,19 +11,21 @@ import (
 // 1st message sent from the server
 // byte 0 = protocol version no.
 // byte 1 = whether encryption is to be used - 0 no , 1 = encryption
-func (sc *Server) handshake(conn net.Conn) error {
+func (sc *Server) handshake(conn net.Conn) (*encryption, error) {
 
 	if err := sc.one(conn); err != nil {
-		return err
+		return nil, err
 	}
 
+	var enc *encryption
 	if sc.encryption {
-		if err := sc.startEncryption(conn); err != nil {
-			return err
+		var err error
+		if enc, err = sc.startEncryption(conn); err != nil {
+			return nil, err
 		}
 	}
 
-	return sc.msgLength(conn)
+	return enc, sc.msgLength(conn, enc)
 
 }
 
@@ -62,37 +64,35 @@ func (sc *Server) one(conn net.Conn) error {
 	}
 }
 
-func (sc *Server) startEncryption(conn net.Conn) error {
+func (sc *Server) startEncryption(conn net.Conn) (*encryption, error) {
 
 	shared, err := sc.keyExchange(conn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	gcm, err := createCipher(shared)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	sc.enc = &encryption{
+	return &encryption{
 		keyExchange: "ecdsa",
 		encryption:  "AES-GCM-256",
 		cipher:      gcm,
-	}
-
-	return nil
+	}, nil
 
 }
 
-func (sc *Server) msgLength(conn net.Conn) error {
+func (sc *Server) msgLength(conn net.Conn, enc *encryption) error {
 
 	toSend := make([]byte, 4)
 
 	buff := make([]byte, 4)
 	binary.BigEndian.PutUint32(buff, uint32(sc.maxMsgSize))
 
-	if sc.encryption {
-		maxMsg, err := encrypt(*sc.enc.cipher, buff)
+	if enc != nil {
+		maxMsg, err := encrypt(*enc.cipher, buff)
 		if err != nil {
 			return err
 		}
