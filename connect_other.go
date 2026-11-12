@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -41,10 +42,29 @@ func (s *Server) run(ctx context.Context) error {
 		return err
 	}
 
+	path := unixSockBase + s.name + unixSockSuffix
+
+	// The listener is also closed when the context ends, possibly after a new server took the path.
+	// Only Close removes the socket, before it returns.
+	if ul, ok := listen.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
+
+	created, statErr := os.Lstat(path)
+	s.removeSocket = sync.OnceFunc(func() {
+		// Best effort only: ext4 reuses inode numbers, so this cannot tell a replaced socket apart.
+		if statErr != nil {
+			return
+		}
+		if current, err := os.Lstat(path); err == nil && os.SameFile(created, current) {
+			_ = os.Remove(path)
+		}
+	})
+
 	s.listen = listen
 	s.setStatusCode(Listening)
 
-	go s.acceptLoop(ctx)
+	go s.serve(ctx)
 
 	return nil
 }
@@ -73,8 +93,8 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 			if i%30 == 29 {
 				slog.Debug("Waiting for client dial to succeed", "err", err)
 			}
-		} else {
-			return conn, c.handshake(conn)
+		} else if c.setup(ctx, conn) {
+			return conn, nil
 		}
 
 		select {

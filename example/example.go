@@ -68,10 +68,10 @@ func server(ctx context.Context) {
 
 			if message.MsgType == -1 {
 
-				if message.Status == "Connected" {
+				if message.Status == "Connected" && message.Conn != nil {
 
 					log.Println("server status", s.Status())
-					_ = s.Write(1, []byte("server - PING"))
+					_ = message.Conn.Write(1, []byte("server - PING"))
 
 				}
 
